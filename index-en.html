@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FC141 · Solo Developer — Godot games, automation, data scraping</title>
+<style>
+  :root{
+    --bg:#0d1117; --card:#151b24; --card2:#1b2430; --line:#263041;
+    --txt:#e6edf3; --dim:#8b98a8; --accent:#4f9dff; --accent2:#38e8b0;
+    --warn:#f0b429;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.7}
+  a{color:var(--accent);text-decoration:none}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 22px}
+  header{padding:72px 0 48px;border-bottom:1px solid var(--line)}
+  .tag{display:inline-block;font-size:13px;color:var(--accent2);border:1px solid rgba(56,232,176,.35);border-radius:99px;padding:4px 12px;margin-bottom:18px;background:rgba(56,232,176,.06)}
+  h1{font-size:44px;letter-spacing:-.5px;margin-bottom:10px}
+  h1 span{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:18px;color:var(--dim);max-width:680px}
+  .hero-links{margin-top:26px;display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:10px 18px;border-radius:8px;border:1px solid var(--line);color:var(--txt);font-size:15px;background:var(--card)}
+  .btn.primary{background:linear-gradient(90deg,#2f7fe0,#38b98a);border:none;color:#fff;font-weight:600}
+  section{padding:56px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:26px;margin-bottom:8px}
+  .desc{color:var(--dim);margin-bottom:28px}
+  .grid{display:grid;gap:18px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .card h3{font-size:17px;margin-bottom:8px}
+  .card p{color:var(--dim);font-size:14.5px}
+  .icon{font-size:22px;margin-bottom:10px}
+  .case{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin-bottom:22px}
+  .case .body{padding:24px}
+  .case h3{font-size:20px;margin-bottom:6px}
+  .case .meta{font-size:13px;color:var(--accent2);margin-bottom:12px;letter-spacing:.3px}
+  .case p{color:var(--dim);font-size:15px;margin-bottom:14px}
+  .shots{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:0 24px 24px}
+  .shots img{width:100%;border-radius:8px;border:1px solid var(--line);display:block}
+  .facts{display:flex;gap:26px;flex-wrap:wrap;margin:16px 0 4px}
+  .fact b{display:block;font-size:20px;color:var(--txt)}
+  .fact span{font-size:13px;color:var(--dim)}
+  .tree{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:0 24px 24px;font-family:Consolas,monospace;font-size:13.5px}
+  .tree pre{background:#0a0f16;border:1px solid var(--line);border-radius:10px;padding:16px;overflow:auto;color:var(--dim)}
+  .tree .t-title{color:var(--txt);font-size:13px;margin-bottom:8px;font-family:inherit}
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:500;font-size:13.5px}
+  td b{color:var(--accent2)}
+  .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;counter-reset:s}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;position:relative}
+  .step:before{counter-increment:s;content:"0" counter(s);position:absolute;top:14px;right:16px;font-size:26px;font-weight:700;color:#1f2a38}
+  .step h4{font-size:15.5px;margin-bottom:6px}
+  .step p{font-size:13.5px;color:var(--dim)}
+  footer{padding:44px 0 72px;color:var(--dim);font-size:14px}
+  .contact{display:flex;gap:14px;flex-wrap:wrap;margin-top:18px}
+  .chip{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:14.5px;color:var(--txt)}
+  .note{background:rgba(240,180,41,.07);border:1px solid rgba(240,180,41,.3);color:#e8c46a;border-radius:10px;padding:14px 16px;font-size:14px;margin-top:18px}
+  .soon{opacity:.62}
+  .badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:6px;background:rgba(79,157,255,.12);color:var(--accent);border:1px solid rgba(79,157,255,.3);margin-left:8px;vertical-align:middle}
+  .badge.b2{background:rgba(240,180,41,.12);color:var(--warn);border-color:rgba(240,180,41,.35)}
+  @media(max-width:860px){
+    .g3,.g4,.flow{grid-template-columns:1fr 1fr}
+    .shots{grid-template-columns:1fr 1fr}
+    .tree{grid-template-columns:1fr}
+    h1{font-size:32px}
+  }
+  @media(max-width:560px){.g3,.g4,.flow,.shots{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="tag">SOLO DEVELOPER · AI-ACCELERATED DELIVERY</div>
+    <h1>FC<span>141</span></h1>
+    <p class="sub">I turn requirements into working software: Godot games, Windows automation tools, scrapers and reports.<br>
+      Small scope, fixed price, documented handover. Based in China (UTC+8) — async-first, daily updates.</p>
+    <div class="hero-links">
+      <a class="btn primary" href="#cases">See work</a>
+      <a class="btn" href="#price">Rates</a>
+      <a class="btn" href="#contact">Get in touch</a>
+    </div>
+  </div>
+</header>
+
+<section id="skills">
+  <div class="wrap">
+    <h2>What I do</h2>
+    <p class="desc">Four services, each delivered as something you can actually run.</p>
+    <div class="grid g4">
+      <div class="card">
+        <div class="icon">🎮</div>
+        <h3>Godot game dev</h3>
+        <p>Godot 4 projects: 2D pixel art, simulation/tycoon loops, economy systems, saves, UI. Prototypes and vertical slices.</p>
+      </div>
+      <div class="card">
+        <div class="icon">⚙️</div>
+        <h3>Automation</h3>
+        <p>Batch file processing, Excel pipelines, scheduled jobs, report generation. Zero-dependency Windows tools.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🕸️</div>
+        <h3>Data extraction</h3>
+        <p>Public web data → clean structured output: CSV/Excel/Google Sheets. Anti-duplicate, retries, logs.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🧪</div>
+        <h3>QA / testing</h3>
+        <p>Functional &amp; compatibility testing, automated test scripts, game regression checks.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="cases">
+  <div class="wrap">
+    <h2>Selected work</h2>
+    <p class="desc">Every item ships with a runnable deliverable and a verifiable description.</p>
+
+    <div class="case">
+      <div class="body">
+        <h3>Bathhouse Tycoon <span class="badge">In progress · commercial</span></h3>
+        <div class="meta">Godot 4 · 2D pixel-art management sim · PC (Steam)</div>
+        <p>A bathhouse management sim: reception, massage/scrubbing/pool/food, hiring, stocking, reputation and events. Core loop is time management layered on top of an economy system.</p>
+        <div class="facts">
+          <div class="fact"><b>75+</b><span>game scripts</span></div>
+          <div class="fact"><b>191</b><span>automated assertions</span></div>
+          <div class="fact"><b>CI gate</b><span>green on every change</span></div>
+          <div class="fact"><b>4–5 mo</b><span>planned schedule</span></div>
+        </div>
+      </div>
+      <div class="shots">
+        <img src="assets/bath-pool.png" alt="Bathhouse - pool scene">
+        <img src="assets/bath-lobby.png" alt="Bathhouse - lobby scene">
+        <img src="assets/bath-kitchen.png" alt="Bathhouse - kitchen scene">
+      </div>
+    </div>
+
+    <div class="case">
+      <div class="body">
+        <h3>File Organizer <span class="badge">Delivered · demo ready</span></h3>
+        <div class="meta">PowerShell · zero-dependency Windows · preview / dedupe / rename / CSV audit</div>
+        <p>One command turns a messy folder into a clean structure: sort by type, dedupe by MD5, rename by date, and emit a CSV audit trail of every move.</p>
+        <div class="facts">
+          <div class="fact"><b>0</b><span>external deps</span></div>
+          <div class="fact"><b>1 day</b><span>req → delivery</span></div>
+          <div class="fact"><b>-DryRun</b><span>preview before moving</span></div>
+          <div class="fact"><b>CSV</b><span>traceable audit log</span></div>
+        </div>
+      </div>
+      <div class="tree">
+        <div>
+          <div class="t-title">Before</div>
+          <pre>Downloads\
+├ quote_final.docx
+├ meeting-notes.txt
+├ beach.jpg
+├ IMG_2024(1).jpg  ← duplicate
+├ bgm.mp3
+├ backup.zip
+├ script.py
+├ unknown.xyz
+└ screenshots\shot.png</pre>
+        </div>
+        <div>
+          <div class="t-title">After</div>
+          <pre>Downloads\
+├ _audit_2026.csv
+├ _duplicates\IMG_2024(1).jpg
+├ Images\20261026_0007_beach.jpg
+├ Docs\20261026_0003_meeting-notes.txt
+├ Docs\20261026_0006_quote_final.docx
+├ Audio\20261026_0002_bgm.mp3
+├ Archives\20261026_0001_backup.zip
+├ Code\20261026_0004_script.py
+└ Other\20261026_0005_unknown.xyz</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="case">
+      <div class="body">
+        <h3>Vertical runner-shooter demo <span class="badge">Delivered · playable</span></h3>
+        <div class="meta">HTML5 Canvas · single file, zero dependencies · 5 levels + 5 bosses · gates + auto-fire + 10 buffs</div>
+        <p>The genre behind those fake ads, playable: the hero auto-runs, you strafe through number gates, auto-fire clears the horde. <strong>Shoot a gate to rewrite its number</strong> — buff numbers grow, debuff numbers shrink and flip into a buff at zero. 10 buff types (allies / damage / fire rate / heal / shield / crit / pierce / slow / double score / screen clear) and their <strong>numbers scale with the level</strong> (2.8× by level 5), with better odds of two buffs as you go deeper. Five levels (city streets / abandoned hospital / underground factory / subway tunnel / rooftop finale), each ending in a boss that sways, telegraphs a charge that actually reaches you, summons adds and fires spreads, enraging below 40% HP.</p>
+        <div class="facts">
+          <div class="fact"><b>45 KB</b><span>single file, no build step</span></div>
+          <div class="fact"><b>5 levels + 5 bosses</b><span>boss phases &amp; enrage</span></div>
+          <div class="fact"><b>10 buffs + 3 debuffs</b><span>shield / crit / pierce / slow / x2 / bomb</span></div>
+          <div class="fact"><b>window.game</b><span>25-key state + tick/jumpToStage, testable headless</span></div>
+        </div>
+        <p style="margin-top:12px"><a class="btn primary" href="../cases/03-runner-demo/index.html">▶ Play in browser (no download)</a></p>
+      </div>
+      <div class="shots" style="grid-template-columns:1fr;justify-items:center">
+        <img src="assets/runner-demo.png" alt="Runner-shooter demo gameplay" style="max-width:300px">
+      </div>
+    </div>
+
+    <div class="case">
+      <div class="body">
+        <h3>Web data → Excel reports <span class="badge">Delivered · demo ready</span></h3>
+        <div class="meta">Python · zero-dependency cleaning · 6 sheets / 4 charts</div>
+        <p>Turns messy scraped JSON into a report you can send to a manager: trims blanks, dedupes, converts web-style numbers ("1.2万" → 12000), then writes KPI overview, detail, category summary, top-N, rating distribution and data-quality sheets with auto charts. Demo dataset is a real TapTap mini-game scrape (45 titles).</p>
+        <div class="facts">
+          <div class="fact"><b>6</b><span>worksheets</span></div>
+          <div class="fact"><b>4</b><span>auto charts</span></div>
+          <div class="fact"><b>45</b><span>real scraped rows</span></div>
+          <div class="fact"><b>0.14 s</b><span>to build</span></div>
+        </div>
+      </div>
+      <div class="tree">
+        <div>
+          <div class="t-title">Input: scraped JSON</div>
+          <pre>taptap-minigames.json
+{"rows":[
+ {"name":"Russian Sand",
+  "cat":"Quiz",
+  "heat":"320000",
+  "rating":"7.6", ...},
+ ...
+]}</pre>
+        </div>
+        <div>
+          <div class="t-title">Output: one .xlsx</div>
+          <pre>TapTap-minigame-report.xlsx
+├ Overview     KPI + scrape info
+├ By category  count/share + pie
+├ Detail       45 rows, filter+freeze
+├ Top 15       ranking + bar chart
+├ Ratings      buckets + pie
+└ Data quality dedupe/missing stats</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="flow">
+  <div class="wrap">
+    <h2>How we work</h2>
+    <p class="desc">Acceptance criteria first, then code.</p>
+    <div class="flow">
+      <div class="step"><h4>Scope</h4><p>We pin down inputs, outputs and usage. I return a feature list and acceptance criteria.</p></div>
+      <div class="step"><h4>Quote</h4><p>Fixed price. 30–50% up front, remainder on acceptance. Scope changes quoted separately.</p></div>
+      <div class="step"><h4>Milestones</h4><p>Runnable builds at each stage — you see progress continuously, no big reveal.</p></div>
+      <div class="step"><h4>Handover</h4><p>Checklist acceptance, 2 free revision rounds, source code + docs included.</p></div>
+    </div>
+    <div class="note">Not accepted: no upfront payment, one-line requirements, on-site work, 24-hour turnarounds, off-platform payments.</div>
+  </div>
+</section>
+
+<section id="price">
+  <div class="wrap">
+    <h2>Rates</h2>
+    <p class="desc">Typical ranges in USD. Quote after a short scope call — no surprise invoices.</p>
+    <table>
+      <tr><th>Type</th><th>Typical scope</th><th>Price</th><th>Lead time</th></tr>
+      <tr><td>Small script</td><td>File organizer, batch rename, Excel processing, simple scraper</td><td><b>$50–150</b></td><td>1–3 days</td></tr>
+      <tr><td>Automation pipeline</td><td>Multi-step workflow, scheduled reports, dashboard</td><td><b>$150–500</b></td><td>3–7 days</td></tr>
+      <tr><td>Game prototype</td><td>Playable core loop, numbers tuning, demo build</td><td><b>$300–1500</b></td><td>1–3 weeks</td></tr>
+      <tr><td>Full small game</td><td>Levels, saves, UI, audio integration</td><td><b>$1500+</b></td><td>3–6 weeks</td></tr>
+      <tr><td>QA / testing</td><td>Functional &amp; compatibility testing, automation scripts</td><td><b>$100–500 / project</b></td><td>varies</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="contact">
+  <div class="wrap">
+    <h2>Get in touch</h2>
+    <p class="desc">Tell me "what it is now → what it should be". I reply within 24 hours with feasibility, price and lead time.</p>
+    <div class="contact">
+      <div class="chip">Email: 702057920@qq.com</div>
+      <div class="chip">WeChat: 13849915258</div>
+      <div class="chip"><a href="https://www.goofish.com/item?id=1093253915054" target="_blank" rel="noopener">Xianyu (闲鱼): 风车起舞141</a></div>
+      <div class="chip">Fiverr / Upwork: profile soon</div>
+      <div class="chip">Payment: PayPal / Payoneer / Wise (USD)</div>
+      <div class="chip"><a href="https://github.com/702057920/portfolio" target="_blank" rel="noopener">Code: GitHub repo</a></div>
+      <div class="chip"><a href="https://702057920.github.io/portfolio/" target="_blank" rel="noopener">Live page (GitHub Pages)</a></div>
+      <div class="chip"><a href="https://702057920.github.io/portfolio/publish/portfolio-zh.pdf" target="_blank" rel="noopener">Portfolio PDF (download)</a></div>
+    </div>
+    <div class="note">Start small: a $50–150 tool delivered in 2–3 days is the cheapest way to test working together.</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    FC141 (风车起舞141) · solo developer · AI-accelerated delivery of working software<br>
+    Portfolio page, real projects — verification welcome.
+  </div>
+</footer>
+
+</body>
+</html>
