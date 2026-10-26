@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>数字门跑酷 · Zombie Gates</title>
+<style>
+  :root{--cyan:#22d3ee;--red:#ef4444;--ink:#0b1020}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#05070f;overflow:hidden;font-family:system-ui,"Microsoft YaHei",sans-serif;-webkit-user-select:none;user-select:none}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  #stage{position:relative;width:min(100vw,56.25vh);height:min(100vh,177.78vw);box-shadow:0 0 60px #000}
+  canvas{width:100%;height:100%;display:block;touch-action:none}
+  .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(3,6,16,.80);color:#e8f0ff;text-align:center;padding:24px;backdrop-filter:blur(2px)}
+  .overlay.hide{display:none}
+  .overlay h1{font-size:clamp(20px,5vw,30px);letter-spacing:1px}
+  .overlay p{font-size:13px;line-height:1.7;color:#9fb0d0;max-width:34ch}
+  .overlay .big{font-size:34px;font-weight:800;color:var(--cyan)}
+  button{cursor:pointer;border:0;border-radius:12px;padding:12px 26px;font-size:16px;font-weight:700;color:#03121a;background:linear-gradient(135deg,#22d3ee,#34d399)}
+  button:active{transform:translateY(1px)}
+  .tips{font-size:11px;color:#6b7f9e}
+  #mute{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.08);color:#cfe0ff;border-radius:8px;padding:4px 8px;font-size:12px;font-weight:400}
+</style>
+</head>
+<body>
+<div id="wrap"><div id="stage">
+  <canvas id="cv" width="540" height="960"></canvas>
+  <button id="mute">🔊</button>
+
+  <div class="overlay" id="startScreen">
+    <h1>数字门跑酷</h1>
+    <p>五关，每关一段跑图 + 一个 BOSS。左右移动穿<b>增益门</b>壮大队伍，自动开火清丧尸。<br>撞到丧尸/被 BOSS 撞掉血，血量为 0 就结束。</p>
+    <p><b>子弹打到门上会改数字</b>：好门的数字越打越大，坏门的数字能打小、打到 0 就不扣你。</p>
+    <p>门有 12 种：盟友 / 伤害 / 射速 / 回血 / <b>护盾</b> / <b>暴击</b> / <b>穿透</b> / <b>减速</b> / <b>双倍分</b> / <b>全屏爆破</b>……<br>关卡越往后，门上的数字越大、两边都是好东西的概率也越高。</p>
+    <p class="tips">键盘 A/D 或 ←/→　手机：手指拖动　空格重开</p>
+    <button id="btnStart">开始</button>
+  </div>
+
+  <div class="overlay hide" id="overScreen">
+    <h1>本轮结束</h1>
+    <div class="big" id="finalScore">0</div>
+    <p id="finalStat"></p>
+    <button id="btnAgain">再来一局</button>
+  </div>
+
+  <div class="overlay hide" id="winScreen">
+    <h1>通关了！</h1>
+    <div class="big" id="winScore">0</div>
+    <p id="winStat"></p>
+    <button id="btnWinAgain">再跑一遍</button>
+  </div>
+</div></div>
+
+<script>
+(() => {
+  "use strict";
+  const cv = document.getElementById("cv");
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+
+  const startScreen = document.getElementById("startScreen");
+  const overScreen = document.getElementById("overScreen");
+  const winScreen = document.getElementById("winScreen");
+  const finalScore = document.getElementById("finalScore");
+  const finalStat = document.getElementById("finalStat");
+  const winScore = document.getElementById("winScore");
+  const winStat = document.getElementById("winStat");
+  const muteBtn = document.getElementById("mute");
+
+  // ---------- 音频（极简合成音，无需素材） ----------
+  let audio = null, muted = false;
+  function sfx(freq, dur, type = "square", vol = 0.04) {
+    if (muted) return;
+    try {
+      if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.value = vol;
+      o.connect(g); g.connect(audio.destination);
+      const t = audio.currentTime;
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.start(t); o.stop(t + dur);
+    } catch (e) { /* 静默失败 */ }
+  }
+  muteBtn.onclick = () => { muted = !muted; muteBtn.textContent = muted ? "🔇" : "🔊"; };
+
+  // ---------- 存储（沙箱 iframe 里 localStorage 会抛异常，必须包住） ----------
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 忽略 */ } },
+  };
+
+  // ---------- 关卡表 ----------
+  const STAGES = [
+    { name: "城区街道", dist: 500, bg1: "#0a1120", bg2: "#111a2e", road: "#151d2e", spawnK: 1.00, hpK: 1.00, vignette: 0.00, healBias: 0,
+      boss: { name: "尸群首领", hp: 320, r: 48, dmg: 26, color: "#22c55e" } },
+    { name: "废弃医院", dist: 600, bg1: "#0b1418", bg2: "#12212a", road: "#16232b", spawnK: 1.10, hpK: 1.25, vignette: 0.05, healBias: 0.5,
+      boss: { name: "护士长 · 血袋", hp: 520, r: 50, dmg: 28, color: "#f472b6" } },
+    { name: "地下工厂", dist: 700, bg1: "#140f0a", bg2: "#241a10", road: "#2a1f13", spawnK: 1.22, hpK: 1.50, vignette: 0.10, healBias: 0,
+      boss: { name: "机械暴君", hp: 720, r: 52, dmg: 30, color: "#f59e0b" } },
+    { name: "地铁隧道", dist: 800, bg1: "#0a0f1a", bg2: "#141c2c", road: "#182236", spawnK: 1.34, hpK: 1.75, vignette: 0.38, healBias: 0,
+      boss: { name: "隧道巨口", hp: 940, r: 54, dmg: 32, color: "#818cf8" } },
+    { name: "天台 · 终局", dist: 900, bg1: "#1a0d14", bg2: "#2a1520", road: "#33182a", spawnK: 1.50, hpK: 2.00, vignette: 0.16, healBias: 0,
+      boss: { name: "母体丧尸", hp: 1200, r: 58, dmg: 34, color: "#ef4444" } },
+  ];
+  const TOTAL_DIST = STAGES.reduce((s, x) => s + x.dist, 0);
+
+  // ---------- 游戏状态 ----------
+  const ROAD_L = 40, ROAD_R = W - 40, ROAD_W = ROAD_R - ROAD_L;
+  const PLAYER_Y = H - 210;
+
+  const G = {
+    mode: "ready",        // ready | playing | boss | over | win
+    t: 0,
+    dist: 0,              // 总里程
+    stage: 0,
+    stageDist: 0,         // 本关已跑
+    speed: 190,
+    hp: 100,
+    maxHp: 100,
+    squad: 0,
+    damage: 2,
+    fireInt: 0.20,
+    fireCd: 0,
+    shield: 0,            // 护盾值（先扣盾再扣血）
+    crit: 0,              // 暴击率（暴击 ×2.5）
+    pierceT: 0,           // 穿透剩余秒数
+    slowT: 0,             // 僵尸减速剩余秒数
+    x2T: 0,               // 双倍得分剩余秒数
+    flashFx: 0,           // 全屏闪白（爆破）
+    hurtCd: 0,            // 近战受伤后的无敌帧
+    kills: 0,
+    bossKills: 0,
+    score: 0,
+    bonus: 0,
+    best: +(store.get("zg_best") || 0),
+    playerX: W / 2,
+    targetX: W / 2,
+    keys: { left: false, right: false },
+    zombies: [], bullets: [], gates: [], pops: [], parts: [], ebullets: [],
+    gateCd: 260, spawnCd: 0.8,
+    boss: null,
+    banner: null,
+    combo: 0, comboT: 0,
+    shake: 0, muzzle: 0,
+  };
+
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  function reset() {
+    Object.assign(G, {
+      mode: "playing", t: 0, dist: 0, stage: 0, stageDist: 0, speed: 190,
+      hp: 100, maxHp: 100, squad: 0, damage: 2, fireInt: 0.20, fireCd: 0,
+      shield: 0, crit: 0, pierceT: 0, slowT: 0, x2T: 0, flashFx: 0, hurtCd: 0,
+      kills: 0, bossKills: 0, score: 0, bonus: 0,
+      playerX: W / 2, targetX: W / 2,
+      zombies: [], bullets: [], gates: [], pops: [], parts: [], ebullets: [],
+      gateCd: 1.5, spawnCd: 0.6, boss: null, banner: null,
+      combo: 0, comboT: 0, shake: 0, muzzle: 0,
+    });
+    G.banner = { title: "关卡 1 · " + STAGES[0].name, sub: "跑 " + STAGES[0].dist + " 米后 BOSS 出现", life: 2.4 };
+    overScreen.classList.add("hide");
+    winScreen.classList.add("hide");
+  }
+
+  function start() {
+    startScreen.classList.add("hide");
+    reset();
+  }
+
+  // ---------- 输入 ----------
+  addEventListener("keydown", (e) => {
+    if (e.key === "a" || e.key === "A" || e.key === "ArrowLeft") G.keys.left = true;
+    if (e.key === "d" || e.key === "D" || e.key === "ArrowRight") G.keys.right = true;
+    if ((e.key === " " || e.key === "Enter") && G.mode !== "playing" && G.mode !== "boss") start();
+  });
+  addEventListener("keyup", (e) => {
+    if (e.key === "a" || e.key === "A" || e.key === "ArrowLeft") G.keys.left = false;
+    if (e.key === "d" || e.key === "D" || e.key === "ArrowRight") G.keys.right = false;
+  });
+
+  let dragging = false;
+  function pointerX(e) {
+    const r = cv.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+    return x / r.width * W;
+  }
+  cv.addEventListener("pointerdown", (e) => { if (G.mode === "playing" || G.mode === "boss") { dragging = true; G.targetX = pointerX(e); } });
+  cv.addEventListener("pointermove", (e) => { if (dragging && (G.mode === "playing" || G.mode === "boss")) G.targetX = pointerX(e); });
+  addEventListener("pointerup", () => { dragging = false; });
+
+  document.getElementById("btnStart").onclick = start;
+  document.getElementById("btnAgain").onclick = start;
+  document.getElementById("btnWinAgain").onclick = start;
+
+  // ---------- 门 ----------
+  // 权重池：数值随关卡放大（越往后吃到的东西越好、花样越多）
+  const GATE_POOL = [
+    { kind: "squad",  base: 6,     w: 3, color: "#22d3ee" },
+    { kind: "squad",  base: 12,    w: 2, color: "#22d3ee" },
+    { kind: "dmg",    base: 0.5,   w: 3, color: "#a78bfa" },
+    { kind: "dmg",    base: 1,     w: 2, color: "#a78bfa" },
+    { kind: "fire",   base: 0.022, w: 2, color: "#34d399" },
+    { kind: "heal",   base: 20,    w: 2, color: "#facc15" },
+    { kind: "shield", base: 50,    w: 2, color: "#60a5fa" },
+    { kind: "crit",   base: 0.08,  w: 2, color: "#fb923c" },
+    { kind: "pierce", base: 8,     w: 1, color: "#c084fc" },
+    { kind: "slow",   base: 8,     w: 1, color: "#38bdf8" },
+    { kind: "x2",     base: 10,    w: 1, color: "#fde047" },
+    { kind: "bomb",   base: 1,     w: 1, color: "#f87171", minStage: 1 },
+  ];
+  const BAD_POOL = [
+    { kind: "squad", base: -8, color: "#ef4444" },
+    { kind: "heal", base: -20, color: "#ef4444" },
+    { kind: "dmg", base: -0.5, color: "#ef4444" },
+  ];
+
+  // 关卡放大倍率：第 1 关 1.0，第 5 关 2.8
+  function gateScale() { return 1 + G.stage * 0.45; }
+
+  function pickGoodTpl() {
+    const pool = GATE_POOL.filter((t) => (t.minStage || 0) <= G.stage);
+    let total = 0;
+    for (const t of pool) total += t.w;
+    let r = Math.random() * total;
+    for (const t of pool) { r -= t.w; if (r <= 0) return t; }
+    return pool[0];
+  }
+
+  function sideText(side) {
+    const n = side.n;
+    const sign = n > 0.01 ? "+" : (n < -0.01 ? "-" : "");
+    if (side.kind === "squad") return sign + Math.round(Math.abs(n)) + " 盟友";
+    if (side.kind === "heal") return sign + Math.round(Math.abs(n)) + " HP";
+    if (side.kind === "dmg") {
+      const a = Math.abs(n);
+      const v = a % 1 === 0 ? String(a) : a.toFixed(1);
+      return sign + v + " 伤害";
+    }
+    if (side.kind === "fire") return "射速 +" + Math.round((n / 0.20) * 100) + "%";
+    if (side.kind === "shield") return "护盾 +" + Math.round(n);
+    if (side.kind === "crit") return "暴击 +" + Math.round(n * 100) + "%";
+    if (side.kind === "pierce") return "穿透 " + Math.round(n) + "s";
+    if (side.kind === "slow") return "减速 " + Math.round(n) + "s";
+    if (side.kind === "x2") return "双倍分 " + Math.round(n) + "s";
+    if (side.kind === "bomb") return "全屏爆破";
+    return String(n);
+  }
+  function isBadSide(side) {
+    if (side.kind === "squad" || side.kind === "heal" || side.kind === "dmg") return side.n < 0;
+    if (side.kind === "fire") return side.n < 0;
+    return false;
+  }
+  function makeSide(tpl) {
+    const f = gateScale();
+    const s = { kind: tpl.kind, n: 0, color: tpl.color };
+    if (tpl.kind === "squad") s.n = Math.round(tpl.base * f);
+    else if (tpl.kind === "heal") s.n = Math.round(tpl.base * f);
+    else if (tpl.kind === "shield") s.n = Math.round(tpl.base * f);
+    else if (tpl.kind === "dmg") s.n = +(tpl.base * f).toFixed(1);
+    else if (tpl.kind === "crit") s.n = +(tpl.base * f).toFixed(2);
+    else if (tpl.kind === "fire") s.n = +(tpl.base * f).toFixed(3);
+    else s.n = tpl.base;
+    s.text = sideText(s);
+    return s;
+  }
+
+  function spawnGate(force = false) {
+    if (!force && G.gates.some((g) => g.y < 250)) return;
+    const healBias = stageCfg().healBias || 0;
+    const goodTpl = healBias && Math.random() < healBias
+      ? GATE_POOL.find((t) => t.kind === "heal")
+      : pickGoodTpl();
+    const good = makeSide(goodTpl);
+    const leftGood = Math.random() < 0.5;
+    // 越往后「两边都是好东西」的概率越高（玩得爽）
+    const bothGoodChance = 0.45 + Math.min(0.25, G.stage * 0.06);
+    if (Math.random() < 1 - bothGoodChance) {
+      const bad = makeSide(BAD_POOL[(Math.random() * BAD_POOL.length) | 0]);
+      G.gates.push({ y: -80, passed: false, hit: 0, left: leftGood ? good : bad, right: leftGood ? bad : good });
+    } else {
+      let good2 = makeSide(pickGoodTpl());
+      for (let i = 0; i < 8 && good2.kind === good.kind; i++) good2 = makeSide(pickGoodTpl());
+      G.gates.push({ y: -80, passed: false, hit: 0, left: good, right: good2 });
+    }
+  }
+
+  // 子弹命中门：好门数字越打越大，坏门数字越打越小（打没就不扣你）
+  function shootGate(side, x, y, g) {
+    const good = !isBadSide(side);
+    const k = gateScale();
+    if (side.kind === "squad") side.n = good ? Math.min(80, side.n + Math.max(1, Math.round(2 * k))) : Math.min(0, side.n + 1);
+    else if (side.kind === "heal") side.n = good ? Math.min(160, side.n + Math.max(3, Math.round(8 * k))) : Math.min(0, side.n + 2);
+    else if (side.kind === "dmg") side.n = good ? Math.min(6, +(side.n + 0.4 * k).toFixed(1)) : Math.min(0, +(side.n + 0.4).toFixed(1));
+    else if (side.kind === "shield") side.n = Math.min(240, side.n + Math.max(5, Math.round(10 * k)));
+    else if (side.kind === "crit") side.n = Math.min(0.65, +(side.n + 0.02 * k).toFixed(2));
+    else if (side.kind === "pierce" || side.kind === "slow" || side.kind === "x2") side.n = Math.min(30, side.n + 1);
+    side.text = sideText(side);
+    if (g) g.hit = 0.14;
+    popText(x, y - 26, good ? "+1" : "变小", good ? "#7dd3fc" : "#fbbf24", 16);
+    burst(x, y, side.color, 3);
+    sfx(good ? 1400 : 700, 0.03, "square", 0.02);
+  }
+
+  // ---------- 怪 ----------
+  function stageCfg() { return STAGES[Math.min(G.stage, STAGES.length - 1)]; }
+
+  function spawnZombie(boss = false, opts = {}) {
+    const st = stageCfg();
+    const x = opts.x != null ? opts.x : rnd(ROAD_L + 30, ROAD_R - 30);
+    if (boss) {
+      const cfg = st.boss;
+      const b = {
+        x: W / 2, y: -90, r: cfg.r, hp: cfg.hp, maxHp: cfg.hp,
+        name: cfg.name, dmg: cfg.dmg, color: cfg.color,
+        boss: true, phase: "enter", pt: 0, cd: 1.6, flash: 0, vx: 0, vy: 0, contactCd: 0,
+      };
+      G.boss = b;
+      G.mode = "boss";
+      G.ebullets = [];
+      G.banner = { title: "⚠ BOSS：" + cfg.name, sub: "打倒它才能进入下一关", life: 2.6 };
+      G.shake = 0.5;
+      sfx(70, 0.7, "sawtooth", 0.09);
+      return b;
+    }
+    const hp = (3 + G.dist / 200 + rnd(0, 1.5)) * st.hpK;
+    G.zombies.push({ x, y: opts.y != null ? opts.y : -40, r: rnd(16, 24), hp, maxHp: hp, vy: rnd(78, 120) + G.dist / 50, hit: 0, boss: false });
+  }
+
+  function spawnMinions(n) {
+    for (let i = 0; i < n; i++) spawnZombie(false, { x: rnd(ROAD_L + 40, ROAD_R - 40), y: -40 - i * 36 });
+    popText(W / 2, 210, "召唤尸群！", "#fca5a5", 20);
+    sfx(220, 0.18, "sawtooth", 0.05);
+  }
+
+  function bossShoot() {
+    const b = G.boss;
+    if (!b) return;
+    for (const dx of [-120, 0, 120]) {
+      G.ebullets.push({ x: b.x + dx * 0.3, y: b.y + b.r * 0.6, vx: dx * 0.9, vy: 260, r: 9 });
+    }
+    popText(b.x, b.y + b.r + 20, "弹幕！", "#fda4af", 16);
+    sfx(300, 0.12, "square", 0.04);
+  }
+
+  // ---------- 增益应用 ----------
+  function applyGate(g) {
+    if (g.kind === "squad") { G.squad = clamp(G.squad + g.n, 0, 80); }
+    if (g.kind === "dmg") { G.damage = clamp(+(G.damage + g.n).toFixed(2), 0.25, 6); }
+    if (g.kind === "fire") { G.fireInt = clamp(+(G.fireInt - g.n).toFixed(3), 0.10, 0.20); }
+    if (g.kind === "heal") {
+      if (g.n > 0) G.maxHp = Math.min(260, G.maxHp + g.n);
+      G.hp = clamp(G.hp + g.n, 0, G.maxHp);
+    }
+    if (g.kind === "shield") { G.shield = Math.min(240, G.shield + g.n); }
+    if (g.kind === "crit") { G.crit = Math.min(0.65, +(G.crit + g.n).toFixed(2)); }
+    if (g.kind === "pierce") { G.pierceT = Math.max(G.pierceT, g.n); }
+    if (g.kind === "slow") { G.slowT = Math.max(G.slowT, g.n); }
+    if (g.kind === "x2") { G.x2T = Math.max(G.x2T, g.n); }
+    if (g.kind === "bomb") {
+      let n = 0;
+      for (const z of G.zombies) {
+        if (z.dead) continue;
+        z.dead = true; G.kills++; n++;
+        burst(z.x, z.y, "#fca5a5", 14);
+      }
+      if (G.boss) { G.boss.hp -= G.boss.maxHp * 0.10; G.boss.flash = 0.15; }
+      G.zombies = G.zombies.filter((z) => !z.dead);
+      G.flashFx = 0.35; G.shake = 0.8;
+      popText(W / 2, H * 0.42, "全屏爆破 · 清掉 " + n + " 只", "#fca5a5", 26);
+      sfx(60, 0.6, "sawtooth", 0.12);
+      if (G.boss && G.boss.hp <= 0) bossDefeated();
+    }
+    popText(G.playerX, PLAYER_Y - 60, g.text, isBadSide(g) ? "#f87171" : "#7dd3fc", 22);
+    sfx(isBadSide(g) ? 180 : 720, 0.08, "triangle", 0.05);
+  }
+
+  // 玩家受伤：先扣护盾
+  function hurtPlayer(n, melee) {
+    if (melee && G.hurtCd > 0) return 0;
+    if (melee) G.hurtCd = 0.55;
+    let dmg = n;
+    if (G.shield > 0) {
+      const a = Math.min(G.shield, dmg);
+      G.shield = +(G.shield - a).toFixed(1);
+      dmg = +(dmg - a).toFixed(1);
+      popText(G.playerX + 26, PLAYER_Y - 70, "护盾 -" + Math.round(a), "#93c5fd", 18);
+    }
+    if (dmg <= 0) { G.shake = Math.max(G.shake, 0.2); return 0; }
+    G.hp -= dmg;
+    G.shake = Math.max(G.shake, 0.42);
+    popText(G.playerX, PLAYER_Y - 92, "-" + Math.round(dmg), "#f87171", 22);
+    burst(G.playerX, PLAYER_Y, "#f87171", 16);
+    sfx(90, 0.2, "square", 0.06);
+    return dmg;
+  }
+
+  function popText(x, y, text, color, size = 22) {
+    G.pops.push({ x, y, text, color, size, life: 0.9 });
+  }
+  function burst(x, y, color, n = 10) {
+    for (let i = 0; i < n; i++) {
+      G.parts.push({ x, y, vx: rnd(-140, 140), vy: rnd(-180, 60), life: rnd(0.25, 0.6), color, r: rnd(1.5, 3.8) });
+    }
+  }
+  function addScore(n) {
+    G.bonus += G.x2T > 0 ? n * 2 : n;
+    G.score = Math.floor(G.dist) + G.kills * 10 + G.stage * 200 + G.bonus;
+  }
+
+  // ---------- 关卡流转 ----------
+  function enterBoss() {
+    const cfg = stageCfg();
+    G.gates = [];
+    spawnZombie(true);
+  }
+
+  function bossDefeated() {
+    const b = G.boss;
+    G.boss = null;
+    G.bossKills++;
+    addScore(500);
+    burst(b.x, b.y, "#fde68a", 60);
+    burst(b.x, b.y, b.color, 40);
+    G.shake = 0.8;
+    sfx(90, 0.5, "sawtooth", 0.08);
+    popText(b.x, b.y, "BOSS 击杀 +500", "#fde68a", 24);
+    G.stage++;
+    G.mode = "playing";
+    if (G.stage >= STAGES.length) {
+      G.mode = "win";
+      if (G.score > G.best) { G.best = G.score; store.set("zg_best", String(G.best)); }
+      winScore.textContent = G.score + " 分";
+      winStat.textContent = `五关全通 · 击杀 ${G.kills} · BOSS ${G.bossKills} · 最高 ${G.best} 分`;
+      winScreen.classList.remove("hide");
+      return;
+    }
+    G.stageDist = 0;
+    G.gates = [];
+    G.ebullets = [];
+    G.zombies = G.zombies.filter((z) => z.y > 0); // 清掉关底杂兵
+    G.maxHp = Math.min(260, G.maxHp + 20);
+    G.hp = Math.min(G.maxHp, G.hp + 40);
+    G.squad = Math.min(80, G.squad + 10);
+    G.damage = clamp(+(G.damage + 1).toFixed(2), 0.25, 6);
+    const st = stageCfg();
+    G.banner = { title: "关卡 " + (G.stage + 1) + " · " + st.name, sub: "奖励：+40 HP / +10 盟友 / +1 伤害　跑 " + st.dist + " 米后 BOSS 出现", life: 2.8 };
+    sfx(520, 0.25, "triangle", 0.06);
+  }
+
+  function gameOver() {
+    G.hp = 0; G.mode = "over";
+    if (G.score > G.best) { G.best = G.score; store.set("zg_best", String(G.best)); }
+    finalScore.textContent = G.score + " 分";
+    const st = STAGES[Math.min(G.stage, STAGES.length - 1)];
+    finalStat.textContent = `第 ${Math.min(G.stage + 1, STAGES.length)} 关「${st.name}」· 跑了 ${Math.floor(G.dist)} 米 · 击杀 ${G.kills} · BOSS ${G.bossKills} · 最高 ${G.best} 分`;
+    overScreen.classList.remove("hide");
+  }
+
+  // ---------- 更新 ----------
+  function update(dt) {
+    if (G.mode === "ready" || G.mode === "over" || G.mode === "win") return;
+    G.t += dt;
+
+    // 玩家横移（Boss 战也能走位）
+    const spd = (G.stage === 4 ? 460 : 520) * dt;
+    if (G.keys.left) G.targetX -= spd;
+    if (G.keys.right) G.targetX += spd;
+    G.targetX = clamp(G.targetX, ROAD_L + 26, ROAD_R - 26);
+    G.playerX += (G.targetX - G.playerX) * Math.min(1, dt * 14);
+
+    // 开火
+    G.fireCd -= dt;
+    if (G.fireCd <= 0) {
+      G.fireCd = G.fireInt;
+      const base = G.damage * (1 + Math.min(G.squad, 40) * 0.025);
+      const mk = (x, y, mul) => {
+        const crit = Math.random() < G.crit;
+        G.bullets.push({ x, y, vy: -900, dmg: +(base * mul * (crit ? 2.5 : 1)).toFixed(2), crit, hitCount: 0 });
+      };
+      mk(G.playerX, PLAYER_Y - 26, 1);
+      if (G.squad >= 10) {
+        mk(G.playerX - 14, PLAYER_Y - 18, 0.6);
+        mk(G.playerX + 14, PLAYER_Y - 18, 0.6);
+      }
+      G.muzzle = 0.07;
+      sfx(880, 0.03, "square", 0.02);
+    }
+
+    // 推进里程（Boss 战冻结）
+    if (G.mode === "playing") {
+      G.dist += G.speed * dt / 10;
+      G.stageDist += G.speed * dt / 10;
+      G.speed = 190 + Math.min(G.dist, 3600) * 0.055;
+      addScore(0);
+
+      // 门
+      G.gateCd -= dt;
+      if (G.gateCd <= 0) { G.gateCd = rnd(4.0, 6.0); spawnGate(); }
+
+      // 本关跑完 → Boss
+      const cfg = stageCfg();
+      if (G.stageDist >= cfg.dist) enterBoss();
+
+      // 刷怪
+      G.spawnCd -= dt;
+      if (G.spawnCd <= 0) {
+        G.spawnCd = Math.max(0.42, 0.95 - G.dist / 1300) / stageCfg().spawnK;
+        spawnZombie(false);
+      }
+    }
+
+    // 门移动
+    for (const g of G.gates) {
+      g.y += G.speed * dt;
+      if (g.hit > 0) g.hit = Math.max(0, g.hit - dt);
+      if (!g.passed && g.y >= PLAYER_Y) {
+        g.passed = true;
+        const left = G.playerX < W / 2;
+        applyGate(left ? g.left : g.right);
+      }
+    }
+    G.gates = G.gates.filter((g) => g.y < H + 240);
+
+    // 子弹
+    for (const b of G.bullets) { b.py = b.y; b.y += b.vy * dt; }
+    G.bullets = G.bullets.filter((b) => b.y > -20);
+
+    // 子弹打门
+    for (const b of G.bullets) {
+      if (b.dead) continue;
+      const lo = Math.min(b.py ?? b.y, b.y), hi = Math.max(b.py ?? b.y, b.y);
+      for (const g of G.gates) {
+        if (g.passed || hi < g.y - 17 || lo > g.y + 17) continue;
+        shootGate(b.x < W / 2 ? g.left : g.right, b.x, g.y, g);
+        b.dead = true;
+        break;
+      }
+    }
+
+    // 丧尸
+    const slowK = G.slowT > 0 ? 0.45 : 1;
+    for (const z of G.zombies) {
+      z.y += z.vy * dt * slowK;
+      if (z.hit > 0) z.hit = Math.max(0, z.hit - dt);
+      const dxp = G.playerX - z.x;
+      if (Math.abs(dxp) > 6) z.x += Math.sign(dxp) * Math.min(Math.abs(dxp), 24 * dt);
+      for (const b of G.bullets) {
+        if (b.dead) continue;
+        const dx = b.x - z.x, dy = b.y - z.y;
+        if (dx * dx + dy * dy < (z.r + 4) * (z.r + 4)) {
+          z.hp -= b.dmg; z.hit = 0.1;
+          b.hitCount = (b.hitCount || 0) + 1;
+          if (G.pierceT > 0 && b.hitCount < 4) { /* 穿透：不消失 */ }
+          else b.dead = true;
+          burst(z.x, z.y, b.crit ? "#fde047" : "#86efac", b.crit ? 8 : 4);
+          popText(z.x + rnd(-8, 8), z.y - z.r - 6, b.dmg.toFixed(1) + (b.crit ? "!" : ""), b.crit ? "#fde047" : "#bbf7d0", b.crit ? 17 : 13);
+          if (z.hp <= 0 && !z.dead) {
+            z.dead = true; G.kills++;
+            addCombo();
+            burst(z.x, z.y, "#22c55e", 16);
+            popText(z.x, z.y - z.r - 12, "+10", "#86efac", 14);
+            sfx(140 + Math.min(G.combo, 12) * 20, 0.08, "sawtooth", 0.04);
+          }
+        }
+      }
+      if (!z.dead && z.y + z.r > PLAYER_Y - 14 && Math.abs(z.x - G.playerX) < z.r + 22) {
+        z.dead = true;
+        hurtPlayer(14 + G.stage * 3, true);
+      }
+      if (z.y - z.r > H + 40) z.dead = true;
+    }
+
+    // BOSS
+    if (G.mode === "boss" && G.boss) updateBoss(dt);
+
+    // BOSS 弹幕
+    for (const e of G.ebullets) {
+      e.x += e.vx * dt; e.y += e.vy * dt;
+      const dx = e.x - G.playerX, dy = e.y - PLAYER_Y;
+      if (dx * dx + dy * dy < (e.r + 16) * (e.r + 16)) {
+        e.dead = true;
+        hurtPlayer(12);
+        burst(e.x, e.y, "#fda4af", 12);
+      }
+      if (e.y > H + 30) e.dead = true;
+    }
+    G.ebullets = G.ebullets.filter((e) => !e.dead);
+
+    G.bullets = G.bullets.filter((b) => !b.dead);
+    G.zombies = G.zombies.filter((z) => !z.dead);
+
+    // 连击计时
+    if (G.comboT > 0) { G.comboT -= dt; if (G.comboT <= 0) G.combo = 0; }
+
+    // 增益计时
+    if (G.pierceT > 0) G.pierceT = Math.max(0, G.pierceT - dt);
+    if (G.slowT > 0) G.slowT = Math.max(0, G.slowT - dt);
+    if (G.x2T > 0) G.x2T = Math.max(0, G.x2T - dt);
+    if (G.flashFx > 0) G.flashFx = Math.max(0, G.flashFx - dt);
+    if (G.hurtCd > 0) G.hurtCd = Math.max(0, G.hurtCd - dt);
+
+    // 粒子 / 飘字 / 横幅
+    for (const p of G.parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 420 * dt; p.life -= dt; }
+    G.parts = G.parts.filter((p) => p.life > 0);
+    for (const p of G.pops) { p.y -= 40 * dt; p.life -= dt; }
+    G.pops = G.pops.filter((p) => p.life > 0);
+    if (G.banner) { G.banner.life -= dt; if (G.banner.life <= 0) G.banner = null; }
+    G.shake = Math.max(0, G.shake - dt);
+    G.muzzle = Math.max(0, G.muzzle - dt);
+
+    if (G.hp <= 0) gameOver();
+  }
+
+  function addCombo() {
+    G.combo = G.comboT > 0 ? G.combo + 1 : 1;
+    G.comboT = 1.6;
+  }
+
+  function updateBoss(dt) {
+    const b = G.boss;
+    b.pt += dt;
+    b.flash = Math.max(0, b.flash - dt);
+    b.cd -= dt;
+    const enraged = b.hp / b.maxHp < 0.4;
+
+    if (b.phase === "enter") {
+      b.y += 150 * dt;
+      if (b.y >= 300) { b.y = 300; b.phase = "idle"; b.cd = 1.4; }
+    } else if (b.phase === "idle") {
+      const k = enraged ? 1.6 : 1;
+      b.y = 300 + Math.sin(b.pt * 1.6 * k) * 12;
+      b.x = W / 2 + Math.sin(b.pt * 0.9 * k) * (ROAD_W * 0.28);
+      if (b.cd <= 0) {
+        const roll = Math.random();
+        if (roll < 0.38) { b.phase = "windup"; b.pt = 0; }
+        else if (roll < 0.70) { b.phase = "cast"; b.pt = 0; }
+        else { bossShoot(); b.cd = enraged ? 1.3 : 2.2; }
+      }
+    } else if (b.phase === "windup") {
+      // 蓄力：停在玩家正上方附近，红圈闪
+      b.x += (G.playerX - b.x) * Math.min(1, dt * 3.5);
+      b.y = 300 + Math.sin(b.pt * 20) * 6;
+      if (b.pt >= (enraged ? 0.55 : 0.8)) { b.phase = "charge"; b.pt = 0; }
+    } else if (b.phase === "charge") {
+      b.vy2 = enraged ? 1150 : 900;
+      b.y += b.vy2 * dt;
+      // 冲到底（越过玩家所在行）再回位 —— 之前停在玩家上方 150px，永远撞不到人
+      if (b.y > PLAYER_Y + b.r + 60) { b.phase = "return"; b.pt = 0; }
+    } else if (b.phase === "return") {
+      b.y -= 320 * dt;
+      b.x += (W / 2 - b.x) * Math.min(1, dt * 2);
+      if (b.y <= 300) { b.y = 300; b.phase = "idle"; b.cd = 1.8; }
+    } else if (b.phase === "cast") {
+      b.y = 300 + Math.sin(b.pt * 6) * 4;
+      if (b.pt >= 0.5) { spawnMinions(enraged ? 4 : 3); b.phase = "idle"; b.cd = enraged ? 1.8 : 2.4; }
+    }
+
+    // BOSS 撞玩家（冲撞 / 贴身都算，带 0.7s 冷却防连扣）
+    b.contactCd = Math.max(0, (b.contactCd || 0) - dt);
+    if (b.phase === "charge" && b.y > 120) burst(b.x + rnd(-b.r, b.r) * 0.5, b.y + b.r * 0.4, "#fca5a5", 2);
+    const dx = b.x - G.playerX, dy = b.y - PLAYER_Y;
+    if (dx * dx + dy * dy < (b.r + 17) * (b.r + 17)) {
+      if (b.contactCd <= 0) {
+        b.contactCd = 0.7;
+        hurtPlayer(b.dmg, true);
+        b.cd = Math.max(b.cd, 0.6);
+      }
+    }
+
+    // 玩家子弹打 BOSS
+    for (const bl of G.bullets) {
+      if (bl.dead) continue;
+      const bx = bl.x - b.x, by = bl.y - b.y;
+      if (bx * bx + by * by < (b.r + 6) * (b.r + 6)) {
+        b.hp -= bl.dmg; bl.dead = true; b.flash = 0.09;
+        burst(bl.x, bl.y, "#fef08a", 4);
+        popText(b.x + rnd(-20, 20), b.y + b.r * 0.4, bl.dmg.toFixed(1), "#fde68a", 14);
+        sfx(520, 0.02, "square", 0.02);
+        if (b.hp <= 0) { bossDefeated(); return; }
+      }
+    }
+  }
+
+  // ---------- 绘制 ----------
+  function stageColors() { return stageCfg(); }
+
+  function drawRoad() {
+    const st = stageColors();
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, st.bg1); g.addColorStop(1, st.bg2);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = st.road;
+    ctx.fillRect(ROAD_L, 0, ROAD_W, H);
+
+    const off = (G.dist * 26) % 120;
+    ctx.strokeStyle = "rgba(120,160,220,.20)";
+    ctx.lineWidth = 3;
+    for (let y = -off; y < H; y += 120) {
+      for (const lx of [W * 0.5 - ROAD_W * 0.25, W * 0.5 + ROAD_W * 0.25]) {
+        ctx.beginPath(); ctx.moveTo(lx, y); ctx.lineTo(lx, y + 60); ctx.stroke();
+      }
+    }
+    ctx.fillStyle = "rgba(34,211,238,.10)";
+    ctx.fillRect(ROAD_L - 6, 0, 6, H); ctx.fillRect(ROAD_R, 0, 6, H);
+  }
+
+  function drawGates() {
+    for (const g of G.gates) {
+      const h = 34;
+      const half = ROAD_W / 2 - 4;
+      const shakeX = g.hit > 0 ? rnd(-3, 3) : 0;
+      const pairs = [[ROAD_L, g.left], [W / 2, g.right]];
+      for (const [x, gate] of pairs) {
+        ctx.globalAlpha = g.passed ? 0.35 : 1;
+        ctx.fillStyle = gate.color + "22";
+        ctx.strokeStyle = gate.color;
+        ctx.lineWidth = 3;
+        roundRect(x + 2 + shakeX, g.y - h / 2, half - 4, h, 10);
+        ctx.fill(); ctx.stroke();
+        ctx.fillStyle = gate.color;
+        ctx.font = "bold 20px system-ui";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(gate.text, x + half / 2 + shakeX, g.y);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawZombies() {
+    for (const z of G.zombies) {
+      const r = z.r;
+      const flash = z.hit > 0;
+      if (flash) { ctx.fillStyle = "#fef9c3"; ctx.beginPath(); ctx.arc(z.x, z.y, r + 2, 0, 7); ctx.fill(); }
+      ctx.fillStyle = z.boss ? "#15803d" : "#3f6212";
+      ctx.beginPath(); ctx.arc(z.x, z.y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = z.boss ? "#22c55e" : "#65a30d";
+      ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = "rgba(3,7,18,.85)";
+      ctx.beginPath(); ctx.ellipse(z.x - r * 0.3, z.y - r * 0.14, r * 0.2, r * 0.24, 0, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(z.x + r * 0.3, z.y - r * 0.14, r * 0.2, r * 0.24, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = z.boss ? "#fef08a" : "#fde68a";
+      ctx.beginPath(); ctx.arc(z.x - r * 0.3, z.y - r * 0.12, r * 0.09, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(z.x + r * 0.3, z.y - r * 0.12, r * 0.09, 0, 7); ctx.fill();
+      ctx.strokeStyle = "rgba(3,7,18,.7)"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(z.x - r * 0.28, z.y + r * 0.38); ctx.lineTo(z.x + r * 0.28, z.y + r * 0.38); ctx.stroke();
+      if (z.hp < z.maxHp) {
+        const w = r * 2;
+        ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(z.x - w / 2, z.y - r - 10, w, 5);
+        ctx.fillStyle = "#f87171"; ctx.fillRect(z.x - w / 2, z.y - r - 10, w * clamp(z.hp / z.maxHp, 0, 1), 5);
+      }
+    }
+  }
+
+  function drawBoss() {
+    const b = G.boss;
+    if (!b) return;
+    // 蓄力警示圈
+    if (b.phase === "windup") {
+      ctx.strokeStyle = "rgba(248,113,113,.85)";
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r + 14 + Math.sin(b.pt * 24) * 6, 0, 7); ctx.stroke();
+    }
+    // 光环
+    const gr = ctx.createRadialGradient(b.x, b.y, b.r * 0.4, b.x, b.y, b.r * 2.1);
+    gr.addColorStop(0, "rgba(239,68,68,.35)"); gr.addColorStop(1, "rgba(239,68,68,0)");
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 2.1, 0, 7); ctx.fill();
+    // 身体
+    ctx.fillStyle = b.flash > 0 ? "#fff7ed" : b.color;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.fill();
+    ctx.strokeStyle = "#0b1020"; ctx.lineWidth = 4; ctx.stroke();
+    // 尖刺
+    ctx.fillStyle = b.color;
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + b.pt;
+      const x1 = b.x + Math.cos(a) * b.r, y1 = b.y + Math.sin(a) * b.r;
+      const x2 = b.x + Math.cos(a + 0.12) * (b.r + 14), y2 = b.y + Math.sin(a + 0.12) * (b.r + 14);
+      const x3 = b.x + Math.cos(a + 0.24) * b.r, y3 = b.y + Math.sin(a + 0.24) * b.r;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.fill();
+    }
+    // 眼
+    ctx.fillStyle = "#0b1020";
+    ctx.beginPath(); ctx.ellipse(b.x - b.r * 0.32, b.y - b.r * 0.1, b.r * 0.2, b.r * 0.24, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(b.x + b.r * 0.32, b.y - b.r * 0.1, b.r * 0.2, b.r * 0.24, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = "#fef08a";
+    ctx.beginPath(); ctx.arc(b.x - b.r * 0.32, b.y - b.r * 0.08, b.r * 0.1, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(b.x + b.r * 0.32, b.y - b.r * 0.08, b.r * 0.1, 0, 7); ctx.fill();
+    // 嘴
+    ctx.fillStyle = "rgba(3,7,18,.8)";
+    ctx.beginPath();
+    ctx.ellipse(b.x, b.y + b.r * 0.42, b.r * 0.42, b.r * 0.2 * (1 + Math.sin(b.pt * 8) * 0.3), 0, 0, 7);
+    ctx.fill();
+  }
+
+  function drawPlayer() {
+    const allies = Math.min(G.squad, 40);
+    for (let i = 0; i < allies; i++) {
+      const row = (i / 8) | 0, col = i % 8;
+      const x = G.playerX + (col - 3.5) * (7 + row * 2.5);
+      const y = PLAYER_Y + 28 + row * 15 + Math.sin(G.t * 4 + i) * 2;
+      ctx.fillStyle = i % 3 === 0 ? "#67e8f9" : "#38bdf8";
+      ctx.beginPath(); ctx.arc(x, y, 5.5, 0, 7); ctx.fill();
+    }
+    ctx.fillStyle = "#e2e8f0";
+    ctx.beginPath(); ctx.arc(G.playerX, PLAYER_Y, 18, 0, 7); ctx.fill();
+    ctx.fillStyle = "#0b1020";
+    ctx.fillRect(G.playerX - 4, PLAYER_Y - 38, 8, 24);
+    ctx.fillStyle = "#22d3ee";
+    ctx.fillRect(G.playerX - 5, PLAYER_Y - 44, 10, 8);
+    const gr = ctx.createRadialGradient(G.playerX, PLAYER_Y, 4, G.playerX, PLAYER_Y, 54);
+    gr.addColorStop(0, "rgba(34,211,238,.35)"); gr.addColorStop(1, "rgba(34,211,238,0)");
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.arc(G.playerX, PLAYER_Y, 54, 0, 7); ctx.fill();
+    if (G.muzzle > 0) {
+      const mx = G.playerX, my = PLAYER_Y - 46;
+      const gr2 = ctx.createRadialGradient(mx, my, 2, mx, my, 24);
+      gr2.addColorStop(0, "rgba(253,224,71,.95)"); gr2.addColorStop(1, "rgba(253,224,71,0)");
+      ctx.fillStyle = gr2;
+      ctx.beginPath(); ctx.arc(mx, my, 24, 0, 7); ctx.fill();
+    }
+  }
+
+  function drawBullets() {
+    ctx.strokeStyle = "#fde68a"; ctx.lineWidth = 3; ctx.lineCap = "round";
+    for (const b of G.bullets) {
+      ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x, b.y + 12); ctx.stroke();
+    }
+    for (const e of G.ebullets) {
+      const gr = ctx.createRadialGradient(e.x, e.y, 1, e.x, e.y, 14);
+      gr.addColorStop(0, "#fecdd3"); gr.addColorStop(1, "rgba(244,63,94,0)");
+      ctx.fillStyle = gr;
+      ctx.beginPath(); ctx.arc(e.x, e.y, 14, 0, 7); ctx.fill();
+      ctx.fillStyle = "#fb7185";
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, 7); ctx.fill();
+    }
+  }
+
+  function drawHud() {
+    const st = STAGES[Math.min(G.stage, STAGES.length - 1)];
+
+    ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillStyle = "#e8f0ff";
+    ctx.font = "bold 26px system-ui";
+    ctx.fillText(Math.floor(G.dist) + " m", 18, 14);
+
+    ctx.font = "12px system-ui"; ctx.fillStyle = "#8fa6c9";
+    ctx.fillText("分数 " + G.score + "　最高 " + G.best, 18, 46);
+
+    // 血条
+    const bw = 176, bx = 18, by = 72;
+    ctx.fillStyle = "rgba(0,0,0,.5)"; roundRect(bx, by, bw, 10, 5); ctx.fill();
+    ctx.fillStyle = G.hp > 35 ? "#34d399" : "#ef4444";
+    roundRect(bx, by, Math.max(2, bw * clamp(G.hp / G.maxHp, 0, 1)), 10, 5); ctx.fill();
+    ctx.font = "11px system-ui"; ctx.fillStyle = "#8fa6c9";
+    ctx.textAlign = "left";
+    ctx.fillText("HP " + Math.max(0, Math.round(G.hp)) + "/" + Math.round(G.maxHp), bx, by + 15);
+    // 护盾条
+    if (G.shield > 0) {
+      ctx.fillStyle = "rgba(0,0,0,.5)"; roundRect(bx, by + 30, bw, 8, 4); ctx.fill();
+      ctx.fillStyle = "#60a5fa";
+      roundRect(bx, by + 30, Math.max(2, bw * clamp(G.shield / 240, 0, 1)), 8, 4); ctx.fill();
+      ctx.fillStyle = "#93c5fd"; ctx.font = "11px system-ui";
+      ctx.fillText("护盾 " + Math.round(G.shield), bx, by + 42);
+    }
+
+    // 队伍 / 伤害
+    ctx.textAlign = "right"; ctx.font = "13px system-ui"; ctx.fillStyle = "#9fb0d0";
+    ctx.fillText("盟友 " + G.squad + (G.squad >= 60 ? "（满编）" : ""), W - 18, 46);
+    const totalMul = G.damage * (1 + Math.min(G.squad, 40) * 0.025);
+    ctx.fillText("伤害 x" + totalMul.toFixed(1), W - 18, 66);
+    let hudY = 86;
+    if (G.squad >= 10) { ctx.fillStyle = "#22d3ee"; ctx.fillText("三连发", W - 18, hudY); hudY += 18; }
+    if (G.crit > 0) { ctx.fillStyle = "#fb923c"; ctx.fillText("暴击 " + Math.round(G.crit * 100) + "%", W - 18, hudY); hudY += 18; }
+    if (G.pierceT > 0) { ctx.fillStyle = "#c084fc"; ctx.fillText("穿透 " + G.pierceT.toFixed(1) + "s", W - 18, hudY); hudY += 18; }
+    if (G.slowT > 0) { ctx.fillStyle = "#38bdf8"; ctx.fillText("减速 " + G.slowT.toFixed(1) + "s", W - 18, hudY); hudY += 18; }
+    if (G.x2T > 0) { ctx.fillStyle = "#fde047"; ctx.fillText("双倍分 " + G.x2T.toFixed(1) + "s", W - 18, hudY); hudY += 18; }
+
+    // 关卡进度
+    ctx.textAlign = "center"; ctx.font = "bold 13px system-ui"; ctx.fillStyle = "#c7d2fe";
+    ctx.fillText("关卡 " + (Math.min(G.stage, STAGES.length - 1) + 1) + "/" + STAGES.length + " · " + st.name, W / 2, 16);
+    const pw = 220, px = W / 2 - pw / 2, py = 36;
+    ctx.fillStyle = "rgba(255,255,255,.12)"; roundRect(px, py, pw, 6, 3); ctx.fill();
+    const prog = G.mode === "boss" ? 1 : clamp(G.stageDist / st.dist, 0, 1);
+    ctx.fillStyle = G.mode === "boss" ? "#ef4444" : "#22d3ee";
+    roundRect(px, py, Math.max(2, pw * prog), 6, 3); ctx.fill();
+
+    // BOSS 血条
+    if (G.boss) {
+      const b = G.boss;
+      const bwx = W - 60, bxx = 30, byy = 62;
+      ctx.textAlign = "center"; ctx.font = "bold 14px system-ui"; ctx.fillStyle = "#fecaca";
+      ctx.fillText("BOSS · " + b.name, W / 2, byy - 20);
+      ctx.fillStyle = "rgba(0,0,0,.6)"; roundRect(bxx, byy, bwx, 12, 6); ctx.fill();
+      ctx.fillStyle = "#ef4444";
+      roundRect(bxx, byy, Math.max(2, bwx * clamp(b.hp / b.maxHp, 0, 1)), 12, 6); ctx.fill();
+    }
+
+    // 连击
+    if (G.combo >= 2) {
+      ctx.textAlign = "center"; ctx.font = "bold 20px system-ui";
+      ctx.fillStyle = "#fde68a";
+      ctx.fillText("连击 x" + G.combo, W / 2, 92);
+    }
+  }
+
+  function drawBanner() {
+    if (!G.banner) return;
+    const a = clamp(G.banner.life > 1.8 ? (2.8 - G.banner.life) * 3 : G.banner.life / 1.8, 0, 1);
+    ctx.globalAlpha = a;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(3,6,16,.72)";
+    roundRect(W / 2 - 210, H * 0.34, 420, 96, 16); ctx.fill();
+    ctx.fillStyle = "#f8fafc"; ctx.font = "bold 24px system-ui";
+    ctx.fillText(G.banner.title, W / 2, H * 0.34 + 34);
+    ctx.fillStyle = "#9fb0d0"; ctx.font = "13px system-ui";
+    ctx.fillText(G.banner.sub, W / 2, H * 0.34 + 68);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawPops() {
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    for (const p of G.pops) {
+      ctx.globalAlpha = clamp(p.life / 0.9, 0, 1);
+      ctx.font = "bold " + (p.size || 22) + "px system-ui";
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y);
+      ctx.globalAlpha = 1;
+    }
+    for (const p of G.parts) {
+      ctx.globalAlpha = clamp(p.life / 0.5, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function render() {
+    ctx.save();
+    if (G.shake > 0) ctx.translate(rnd(-6, 6) * G.shake, rnd(-6, 6) * G.shake);
+    drawRoad();
+    drawGates();
+    drawBullets();
+    drawZombies();
+    drawBoss();
+    drawPlayer();
+    drawPops();
+    ctx.restore();
+    // 氛围：隧道更暗；BOSS 战加血红脉冲
+    const bossPulse = G.mode === "boss" ? 0.16 + Math.sin(G.t * 6) * 0.05 : 0;
+    const vg = (stageCfg().vignette || 0) + bossPulse;
+    if (vg > 0.01) {
+      const rad = ctx.createRadialGradient(W / 2, H * 0.45, 140, W / 2, H * 0.45, W * 0.78);
+      rad.addColorStop(0, "rgba(0,0,0,0)");
+      rad.addColorStop(1, G.mode === "boss" ? `rgba(120,0,0,${Math.min(0.6, vg)})` : `rgba(0,0,0,${Math.min(0.6, vg)})`);
+      ctx.fillStyle = rad;
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (G.flashFx > 0) {
+      ctx.fillStyle = "rgba(254,240,138," + (G.flashFx * 1.4).toFixed(2) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
+    drawHud();
+    drawBanner();
+  }
+
+  // ---------- 主循环 ----------
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // 供自动化测试/调试读取（作品集演示用）
+  window.game = {
+    get state() {
+      return {
+        mode: G.mode, dist: Math.floor(G.dist), stage: Math.min(G.stage + 1, STAGES.length), stageDist: Math.floor(G.stageDist),
+        stageTarget: STAGES[Math.min(G.stage, STAGES.length - 1)].dist, stageName: STAGES[Math.min(G.stage, STAGES.length - 1)].name,
+        hp: Math.round(G.hp), maxHp: Math.round(G.maxHp),
+        squad: G.squad, damage: G.damage,
+        shield: Math.round(G.shield), crit: G.crit,
+        pierceT: +G.pierceT.toFixed(1), slowT: +G.slowT.toFixed(1), x2T: +G.x2T.toFixed(1),
+        damageMul: +(G.damage * (1 + Math.min(G.squad, 40) * 0.025)).toFixed(2),
+        kills: G.kills, bossKills: G.bossKills, score: G.score, combo: G.combo, bonus: G.bonus,
+        zombies: G.zombies.length, gates: G.gates.length,
+        boss: G.boss ? { name: G.boss.name, hp: Math.round(G.boss.hp), maxHp: G.boss.maxHp, phase: G.boss.phase } : null,
+        best: G.best,
+      };
+    },
+    gateSides() { return G.gates.map((g) => ({ left: g.left.text, right: g.right.text })); },
+    gatesInfo() { return G.gates.filter((g) => !g.passed).map((g) => ({ y: Math.round(g.y), left: g.left.text, right: g.right.text })); },
+    threat() {
+      // 玩家附近（下方 340px 内）的丧尸，供自动驾驶避让
+      return G.zombies.filter((z) => z.y > PLAYER_Y - 340 && z.y < PLAYER_Y + 60).map((z) => ({ x: Math.round(z.x), y: Math.round(z.y), r: Math.round(z.r) }));
+    },
+    setPlayer(x) { G.targetX = clamp(x, ROAD_L + 26, ROAD_R - 26); },
+    hurt(n) { hurtPlayer(n); },
+    shootAt(x) { G.bullets.push({ x, y: PLAYER_Y - 26, py: PLAYER_Y - 26, vy: -900, dmg: 0 }); },
+    tick(dt = 0.05) { update(dt); render(); },
+    forceGate() { spawnGate(true); },
+    pushGate(spec = {}, y = PLAYER_Y - 6) {
+      const mk = (s = { kind: "squad", n: 10 }) => {
+        const side = { kind: s.kind, n: s.n, color: s.bad ? "#ef4444" : "#22d3ee" };
+        side.text = sideText(side);
+        return side;
+      };
+      G.gates.push({ y, passed: false, hit: 0, left: mk(spec.left), right: mk(spec.right) });
+    },
+    // 直接给增益（测试用）
+    grant(kind, n) {
+      const side = { kind, n, color: "#7dd3fc" };
+      side.text = sideText(side);
+      applyGate(side);
+    },
+    buffs() { return { shield: G.shield, crit: G.crit, pierceT: G.pierceT, slowT: G.slowT, x2T: G.x2T, fireInt: +G.fireInt.toFixed(3) }; },
+    // —— 关卡/BOSS 测试钩子 ——
+    jumpToStage(i) { G.stage = clamp(i, 0, STAGES.length - 1); G.stageDist = 0; G.dist = STAGES.slice(0, G.stage).reduce((s, x) => s + x.dist, 0); G.zombies = []; G.gates = []; },
+    spawnBoss() { if (G.mode === "playing" || G.mode === "boss") { G.gates = []; spawnZombie(true); } },
+    hurtBoss(n) { if (G.boss) { G.boss.hp -= n; if (G.boss.hp <= 0) bossDefeated(); } },
+    bossInfo() { return G.boss ? { name: G.boss.name, hp: G.boss.hp, maxHp: G.boss.maxHp, phase: G.boss.phase, x: G.boss.x, y: G.boss.y } : null; },
+    forceBossPhase(p) { if (G.boss) { G.boss.phase = p; G.boss.pt = 0; } },
+    simulate(sec, dt = 0.05) { for (let t = 0; t < sec; t += dt) update(dt); },
+    start, reset,
+  };
+
+  render();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
